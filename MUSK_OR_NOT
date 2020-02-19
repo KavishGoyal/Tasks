@@ -1,0 +1,167 @@
+# importing the required libraries
+import pandas  as pd
+import numpy as np
+import tensorflow as tf
+from tensorflow import keras
+import seaborn as sns
+import matplotlib.pyplot as plt
+%matplotlib inline
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler,StandardScaler,LabelEncoder
+
+# loading the dataset csv file and converting it into dataframe
+data = pd.read_csv('musk_csv.csv')
+df = pd.DataFrame(data)
+df.head() # printing first 5 rows of the df
+
+# As the dataset is too large so getting more info abot data like:types of data, no. of entries etc.
+df.info()
+
+# checking weather the df has any null values
+df.isnull().sum()
+
+df.describe()
+
+id = df['ID']
+target = df['class']
+mn = df['molecule_name']
+
+df_new = df.copy()
+
+del df_new['ID']
+del df_new['class']
+
+# Applying target encoding transformation
+import category_encoders as ce
+
+te = ce.TargetEncoder(cols=df_new.columns.values, smoothing=0.3).fit(df_new, target)
+
+df_new = te.transform(df_new)
+df_new.head()
+
+# Set the width and height of the figure
+plt.figure(figsize=(20,12))
+plot = sns.barplot(x=df_new.index, y=df_new['f1'])
+
+#correlation plot
+# Set the width and height of the figure
+plt.figure(figsize=(20,14))
+corr = df_new.corr()
+sns.heatmap(corr, annot=False)
+#annot=True - This ensures that the values for each cell appear on the chart. 
+#(Leaving this out removes the numbers from each of the cells!)
+
+#get numeric features
+numeric_features = [f for f in df_new.columns if df[f].dtype != object]
+
+#transform the numeric features using log(x + 1)
+from scipy.stats import skew
+skewed = df_new[numeric_features].apply(lambda x: skew(x.dropna().astype(float)))
+skewed = skewed[skewed > 0.75]
+skewed = skewed.index
+df_new[skewed] = np.log1p(df_new[skewed])
+
+from sklearn.preprocessing import StandardScaler
+#get numeric features
+numeric_features = [f for f in df_new.columns if df[f].dtype != object]
+# scaling the dataset
+scaler = StandardScaler()
+scaler.fit(df_new[numeric_features])
+scaled = scaler.transform(df_new[numeric_features])
+
+for i, col in enumerate(numeric_features):
+       df_new[col] = scaled[:,i]
+# imputing and scaling using pipeline
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.impute import SimpleImputer
+num_pipeline = Pipeline([
+('imputer', SimpleImputer(strategy="median")),
+
+('std_scaler', StandardScaler()),
+])
+df_num_tr = num_pipeline.fit_transform(df_new)
+
+# convert the target into an numnpy array as neural network expects it to be.
+target = np.array(target.values)
+
+# split train data
+x_train, x_test, y_train, y_test = train_test_split(
+    df_num_tr, target,  
+    test_size=0.2, 
+    random_state=42
+)
+
+# FIRST we flatten the data and then used 2 hidden layers each with 3 neurons and relu activation function.
+# Then the final output layer with 2 neuron(as we have binary classes  our output) with softmax activation function.
+
+model = tf.keras.models.Sequential([tf.keras.layers.Flatten(), 
+                                    tf.keras.layers.Dense(3, activation=tf.nn.relu),  
+                                    tf.keras.layers.Dense(3, activation=tf.nn.relu),
+                                    tf.keras.layers.Dense(2, activation=tf.nn.softmax)])
+                                    
+                                    
+# Now compile the model with 'adam' optimizer and categorical loss function.
+model.compile(optimizer = tf.train.AdamOptimizer(),
+              loss = 'categorical_crossentropy',
+              metrics=['accuracy'])
+              
+              
+# Now train the model using spited dataset and get the loss and accuracy as score.
+
+batch_size = 80    
+history = model.fit(x_train, y_train, batch_size=batch_size, epochs=10, validation_data = (x_test,y_test), verbose=2)
+
+
+# Ploting the loss and accuracy curves for training and validation 
+fig, ax = plt.subplots(2,1)
+ax[0].plot(history.history['loss'], color='b', label="Training loss")
+ax[0].plot(history.history['val_loss'], color='r', label="validation loss",axes =ax[0])
+legend = ax[0].legend(loc='best', shadow=True)
+
+ax[1].plot(history.history['acc'], color='b', label="Training accuracy")
+ax[1].plot(history.history['val_acc'], color='r',label="Validation accuracy")
+legend = ax[1].legend(loc='best', shadow=True)
+
+y_pred = model.predict(x_test)
+y_pred
+
+pred = pd.DataFrame(y_pred)
+pred
+
+pred['grt'] = pred[0] # assigning oth column to another column
+pred2 = pred['grt'].values #converting the column into 1-d array
+pred2
+
+# as it is multioutput array so we have have to convert it into binary output array.
+for i in range (0, len(pred2)):
+    if pred2[i] < 0.75:
+        pred2[i] = 0
+    else:
+        pred2[i] =1
+    i+=1
+pred2
+
+# calkculating the confusion matrix
+from sklearn.metrics import classification_report, confusion_matrix
+print(classification_report( y_test, pred2))
+
+
+# traing the data by svm classifier
+from sklearn.svm import SVC
+from sklearn.model_selection import RandomizedSearchCV
+from scipy.stats import reciprocal, uniform
+
+param_distributions = {"gamma": reciprocal(0.001, 0.1), "C": uniform(1, 10)} 
+rnd_search_cv = RandomizedSearchCV(SVC(), param_distributions, n_iter=10, verbose=2, cv=3, random_state=42)
+rnd_search_cv.fit(x_train, y_train)
+
+rnd_search_cv.best_estimator_
+
+
+y_pred = rnd_search_cv.best_estimator_.predict(x_test)
+
+from sklearn.metrics import classification_report, confusion_matrix
+print(classification_report (y_pred, y_test))
+
+
